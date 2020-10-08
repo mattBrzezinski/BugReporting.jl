@@ -9,9 +9,11 @@ using Base.Filesystem: uperm
 using rr_jll
 using Zstd_jll
 using HTTP, JSON
-using AWSCore, AWSS3
+using AWS
 using Tar
 using Pkg
+
+@service S3
 
 # https://github.com/JuliaLang/julia/pull/29411
 if isdefined(Base, :exit_on_sigint)
@@ -224,11 +226,11 @@ function upload_rr_trace(trace_directory)
     println()
     @info "Uploading Trace directory"
 
-    creds = AWSCore.AWSCredentials(
+    creds = AWS.AWSCredentials(
         s3creds["AWS_ACCESS_KEY_ID"],
         s3creds["AWS_SECRET_ACCESS_KEY"],
         s3creds["AWS_SESSION_TOKEN"])
-    aws = AWSCore.aws_config(creds = creds, region="us-east-1")
+    aws = AWS.AWSConfig(creds=creds, region="us-east-1")
 
     # Tar it up
     proc = zstdmt() do zstdp
@@ -236,7 +238,7 @@ function upload_rr_trace(trace_directory)
     end
 
     t = @async begin try
-        upload = s3_begin_multipart_upload(aws, TRACE_BUCKET, s3creds["UPLOAD_PATH"])
+        upload = S3.CreateMultipartUpload(TRACE_BUCKET, s3creds["UPLOAD_PATH"]; aws_config=aws)
         tags = Vector{String}()
         i = 1
         @Base.Experimental.sync begin
@@ -248,7 +250,7 @@ function upload_rr_trace(trace_directory)
                 let partno = i, buf=buf
                     @async begin
                         try
-                            tags[partno] = s3_upload_part(aws, upload, partno, buf)
+                            tags[partno] = S3.PartUpload(upload, partno, buf; aws_config=aws)
                         catch e
                             close(proc)
                             rethrow(e)
@@ -258,7 +260,7 @@ function upload_rr_trace(trace_directory)
                 i += 1
             end
         end
-        s3_complete_multipart_upload(aws, upload, tags)
+        S3.CompleteMultipartUpload(upload, tags; aws_config=aws)
     catch e
         Base.showerror(stderr, e)
     end
